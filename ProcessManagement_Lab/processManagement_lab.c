@@ -6,6 +6,7 @@
  * */
 void task(long duration)
 {
+    sem_wait(sem_global_data);
     // simulate computation for x number of seconds
     usleep(duration*TIME_MULTIPLIER);
 
@@ -22,6 +23,8 @@ void task(long duration)
     if (duration > ShmPTR_global_data->max) {
         ShmPTR_global_data->max = duration;
     }
+    sem_post(sem_global_data);
+    
 }
 
 
@@ -29,16 +32,45 @@ void task(long duration)
  * The function that is executed by each worker process to execute any available job given by the main process
  * */
 void job_dispatch(int i){
-
     // TODO#3:  a. Always check the corresponding shmPTR_jobs_buffer[i] for new  jobs from the main process
-    //          b. Use semaphore so that you don't busy wait
-    //          c. If there's new job, execute the job accordingly: either by calling task(), usleep, exit(3) or kill(getpid(), SIGKILL)
-    //          d. Loop back to check for new job 
+
+    while(true){
+        sem_wait(sem_jobs_buffer[i]);
+
+        job currentJob = shmPTR_jobs_buffer[i];
+        //          b. Use semaphore so that you don't busy wait
+        //CS
+        if (currentJob.task_status == 1){
+            if(currentJob.task_type == 't'){
+                task(currentJob.task_duration);
+                currentJob.task_status = 0;
+
+            }
+            if(currentJob.task_type == 'w'){
+
+                usleep(currentJob.task_duration * TIME_MULTIPLIER);
+
+            }
+            if(currentJob.task_type == 'z'){
+                exit(3);
+            }
+            if(currentJob.task_type == 'i'){
+                kill(getpid(),SIGKILL);
+            }
+        }
+        //end
+
+        
+        
+        //
+        //          c. If there's new job, execute the job accordingly: either by calling task(), usleep, exit(3) or kill(getpid(), SIGKILL)
+        //          d. Loop back to check for new job 
 
 
-    printf("Hello from child %d with pid %d and parent id %d\n", i, getpid(), getppid());
-    exit(0); 
-
+        // printf("Hello from child %d with pid %d and parent id %d\n", i, getpid(), getppid());
+        // exit(0); 
+        
+    }
 }
 
 /** 
@@ -68,8 +100,8 @@ void setup(){
     }
 
     //set global data min and max
-    ShmPTR_global_data->max = -1;
-    ShmPTR_global_data->min = INT_MAX;
+    ShmPTR_global_data->max = 1;
+    ShmPTR_global_data->min = 1;
     //create semaphore of value 1
     sem_global_data = (sem_t*) sem_open("semglobaldata",O_CREAT | O_EXCL, 0644, 1);
     while(true){
@@ -100,7 +132,7 @@ void setup(){
         while(true){
             if(sem_jobs_buffer[i] == SEM_FAILED){
                 sem_unlink(semaphore);
-                sem_jobs_buffer[i] = (sem_t*) sem_open(semaphore,O_CREAT | O_EXCL, 0644, 1);
+                sem_jobs_buffer[i] = (sem_t*) sem_open(semaphore,O_CREAT | O_EXCL, 0644, 0);
             }
             else{
                 break;
@@ -191,7 +223,6 @@ void cleanup(){
 }
 
 
-// Test main for TODO#2
 int main(int argc, char* argv[]){
 
     //Check and parse command line options to be in the right format
@@ -213,17 +244,78 @@ int main(int argc, char* argv[]){
     printf("Number of processes: %d\n", number_of_processes);
     printf("Main process pid %d \n", getpid());
 
+    setup();
     createchildren();
-    
+
+    //enter exactly N jobs to the buffer
     for (int i = 0; i<number_of_processes; i++){
-        printf("Child process %d created with pid: %d \n", i, children_processes[i]);
-        wait(NULL);
+        shmPTR_jobs_buffer[i].task_type = 't';
+        shmPTR_jobs_buffer[i].task_duration = 1;
+        shmPTR_jobs_buffer[i].task_status = 1; //new, undone job
+        sem_post(sem_jobs_buffer[i]); // signal the child
+    }
+
+
+    //sleep for 3 seconds, the children processes should all finish by now
+    sleep(3);
+
+    //enter exactly N termination jobs to the buffer
+    for (int i = 0; i<number_of_processes; i++){
+        shmPTR_jobs_buffer[i].task_type = 'z';//termination job
+        shmPTR_jobs_buffer[i].task_duration = 1;
+        shmPTR_jobs_buffer[i].task_status = 1; 
+        sem_post(sem_jobs_buffer[i]); // signal the child
+    }
+
+    //wait for all N children processes
+    int waitpid_result;
+    for (int i = 0; i<number_of_processes; i++){
+        waitpid_result = waitpid(children_processes[i], NULL, 0); // returns when child exits normally
+        if (waitpid_result != -1){
+            printf("Child %d with pid %d has exited successfully\n", i, waitpid_result);
+        }
+    }
+
+        // print final results
+    printf("Final results: sum -- %ld, odd -- %ld, min -- %ld, max -- %ld, total task -- %ld\n", ShmPTR_global_data->sum_work, ShmPTR_global_data->odd, ShmPTR_global_data->min, ShmPTR_global_data->max, ShmPTR_global_data->total_tasks);
+
+    //detach and remove shared memory locations
+    int detach_status = shmdt((void *) ShmPTR_global_data); //detach
+    if (detach_status == -1) printf("Detach shared memory global_data ERROR\n");
+    int remove_status = shmctl(ShmID_global_data, IPC_RMID, NULL); //delete
+    if (remove_status == -1) printf("Remove shared memory global_data ERROR\n");
+    detach_status = shmdt((void *) shmPTR_jobs_buffer); //detach
+    if (detach_status == -1) printf("Detach shared memory jobs ERROR\n");
+    remove_status = shmctl(ShmID_jobs, IPC_RMID, NULL); //delete
+    if (remove_status == -1) printf("Remove shared memory jobs ERROR\n");
+
+
+    //unlink all semaphores before exiting process
+    int sem_close_status = sem_unlink("semglobaldata");
+    if (sem_close_status == 0){
+        printf("Semaphore globaldata closes succesfully.\n");
+    }
+    else{
+        printf("Semaphore globaldata fails to close.\n");
+    }
+
+    for (int i = 0; i<number_of_processes; i++){
+        char *sem_name = malloc(sizeof(char)*16);
+        sprintf(sem_name, "semjobs%d", i);
+        sem_close_status = sem_unlink(sem_name);
+        if (sem_close_status == 0){
+             printf("Semaphore jobs %d closes succesfully.\n", i);
+        }
+        else{
+            printf("Semaphore jobs %d fails to close.\n", i);
+        }
+        free(sem_name);
     }
 
 
     printf("success\n");
-    return 0;
     
+    return 0;
 }
 
 // Real main
