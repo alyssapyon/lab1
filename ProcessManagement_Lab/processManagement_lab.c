@@ -234,6 +234,8 @@ void cleanup(){
 }
 
 
+
+// Test main for TODO#1
 int main(int argc, char* argv[]){
 
     //Check and parse command line options to be in the right format
@@ -253,42 +255,37 @@ int main(int argc, char* argv[]){
     }
 
     printf("Number of processes: %d\n", number_of_processes);
-    printf("Main process pid %d \n", getpid());
 
     setup();
-    createchildren();
 
-    //enter exactly N jobs to the buffer
+    //test fill the shared memory with something 
     for (int i = 0; i<number_of_processes; i++){
-        shmPTR_jobs_buffer[i].task_type = 't';
-        shmPTR_jobs_buffer[i].task_duration = 1;
-        shmPTR_jobs_buffer[i].task_status = 1; //new, undone job
-        sem_post(sem_jobs_buffer[i]); // signal the child
+        printf("Parent write job %d with duration %d, status %d \n", i, i*2, 0);
+        shmPTR_jobs_buffer[i].task_duration = i*2;
+        shmPTR_jobs_buffer[i].task_status = 0; //from parent
     }
 
+    pid_t pid_test = fork();
 
-    //sleep for 3 seconds, the children processes should all finish by now
-    sleep(3);
-
-    //enter exactly N termination jobs to the buffer
-    for (int i = 0; i<number_of_processes; i++){
-        shmPTR_jobs_buffer[i].task_type = 'z';//termination job
-        shmPTR_jobs_buffer[i].task_duration = 1;
-        shmPTR_jobs_buffer[i].task_status = 1; 
-        sem_post(sem_jobs_buffer[i]); // signal the child
-    }
-
-    //wait for all N children processes
-    int waitpid_result;
-    for (int i = 0; i<number_of_processes; i++){
-        waitpid_result = waitpid(children_processes[i], NULL, 0); // returns when child exits normally
-        if (waitpid_result != -1){
-            printf("Child %d with pid %d has exited successfully\n", i, waitpid_result);
+    if (pid_test == 0){
+        //child print
+        for (int i = 0; i<number_of_processes; i++){
+            printf("Child receives job duration from parent: %d, status %d \n", shmPTR_jobs_buffer[i].task_duration, shmPTR_jobs_buffer[i].task_status);
+            //rewrite for parent
+            shmPTR_jobs_buffer[i].task_duration = -1;
+            shmPTR_jobs_buffer[i].task_status = -1; //from child
+            sem_post(sem_jobs_buffer[i]);
         }
+        exit(0);
     }
+    else{
+        for (int i = 0; i<number_of_processes; i++){
+            sem_wait(sem_jobs_buffer[i]);
+            printf("Job %i  cleared by children. Duration: %d, status %d \n", i, shmPTR_jobs_buffer[i].task_duration, shmPTR_jobs_buffer[i].task_status);
 
-        // print final results
-    printf("Final results: sum -- %ld, odd -- %ld, min -- %ld, max -- %ld, total task -- %ld\n", ShmPTR_global_data->sum_work, ShmPTR_global_data->odd, ShmPTR_global_data->min, ShmPTR_global_data->max, ShmPTR_global_data->total_tasks);
+        }
+        wait(NULL);
+    }
 
     //detach and remove shared memory locations
     int detach_status = shmdt((void *) ShmPTR_global_data); //detach
@@ -322,10 +319,7 @@ int main(int argc, char* argv[]){
         }
         free(sem_name);
     }
-
-
     printf("success\n");
-    
     return 0;
 }
 
