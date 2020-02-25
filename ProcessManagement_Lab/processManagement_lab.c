@@ -42,20 +42,25 @@ void job_dispatch(int i){
         //CS
         if (shmPTR_jobs_buffer[i].task_status == 1){
             if(shmPTR_jobs_buffer[i].task_type == 't'){
-                // printf("task %c%d is being executed by child %d\n",shmPTR_jobs_buffer[i].task_type,shmPTR_jobs_buffer[i].task_duration,i);
+                printf("task %c%d is being executed by child %d\n",shmPTR_jobs_buffer[i].task_type,shmPTR_jobs_buffer[i].task_duration,i);
                 task(shmPTR_jobs_buffer[i].task_duration);
                 shmPTR_jobs_buffer[i].task_status = 0;
             }
             if(shmPTR_jobs_buffer[i].task_type == 'w'){
 
                 usleep(shmPTR_jobs_buffer[i].task_duration * TIME_MULTIPLIER);
+                shmPTR_jobs_buffer[i].task_status = 0;
 
             }
             if(shmPTR_jobs_buffer[i].task_type == 'z'){
                 exit(3);
+                shmPTR_jobs_buffer[i].task_status = -1;
+
             }
             if(shmPTR_jobs_buffer[i].task_type == 'i'){
+                printf("Illegal task has been detected. Child process %d is now exited prematurely\n",i);
                 kill(getpid(),SIGKILL);
+                shmPTR_jobs_buffer[i].task_status = 0;
             }
         }
         //end
@@ -211,6 +216,10 @@ void main_loop(char* fileName){
                     }
                     else{
                         nextTask = true;
+                        shmPTR_jobs_buffer[i].task_type = action;
+                        shmPTR_jobs_buffer[i].task_duration = num;
+                        shmPTR_jobs_buffer[i].task_status = 1;
+
                         sem_post(sem_jobs_buffer[i]);
                         
                     }
@@ -231,11 +240,11 @@ void main_loop(char* fileName){
     }
     fclose(opened_file);
 
-    // printf("Main process is going to send termination signals\n");
+    printf("Main process is going to send termination signals\n");
 
     // TODO#4: Design a way to send termination jobs to ALL worker that are currently alive 
-    int count = 0;
-    while(count<number_of_processes){
+    while(true){
+        int count = 0;
         for (int i=0;i<number_of_processes;++i){
             int status;
             int alive = waitpid(children_processes[i], &status, WNOHANG);
@@ -244,11 +253,13 @@ void main_loop(char* fileName){
                     shmPTR_jobs_buffer[i].task_duration = 0;
                     shmPTR_jobs_buffer[i].task_status = 1;
                     sem_post(sem_jobs_buffer[i]);
-
-                    count++;
+            }
+            else if(alive == 9){
+                count++;
             }
 
         }
+        if(count=number_of_processes){break;}
     }
     //wait for all children processes to properly execute the 'z' termination jobs
     int process_waited_final = 0;
